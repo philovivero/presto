@@ -175,14 +175,14 @@ public class TestOrcStorageManager
 
             assertEquals(reader.nextBatch(), 2);
 
-            LongVector longVector = new LongVector();
+            LongVector longVector = new LongVector(2);
             reader.readVector(0, longVector);
             assertEquals(longVector.isNull[0], false);
             assertEquals(longVector.isNull[1], false);
             assertEquals(longVector.vector[0], 123L);
             assertEquals(longVector.vector[1], 456L);
 
-            SliceVector stringVector = new SliceVector();
+            SliceVector stringVector = new SliceVector(2);
             reader.readVector(1, stringVector);
             assertEquals(stringVector.vector[0], utf8Slice("hello"));
             assertEquals(stringVector.vector[1], utf8Slice("bye"));
@@ -209,6 +209,11 @@ public class TestOrcStorageManager
                 .row(123, "hello", wrappedBuffer(bytes1), dateValue(new DateTime(2001, 8, 22, 0, 0, 0, 0, UTC)), true, 123.45)
                 .row(null, null, null, null, null, null)
                 .row(456, "bye", wrappedBuffer(bytes3), dateValue(new DateTime(2005, 4, 22, 0, 0, 0, 0, UTC)), false, 987.65)
+                .row(881, "-inf", null, null, null, Double.NEGATIVE_INFINITY)
+                .row(882, "+inf", null, null, null, Double.POSITIVE_INFINITY)
+                .row(883, "nan", null, null, null, Double.NaN)
+                .row(884, "min", null, null, null, Double.MIN_VALUE)
+                .row(885, "max", null, null, null, Double.MAX_VALUE)
                 .build();
 
         sink.appendPages(pages);
@@ -217,19 +222,23 @@ public class TestOrcStorageManager
         assertEquals(uuids.size(), 1);
         UUID uuid = Iterables.getOnlyElement(uuids);
 
+        MaterializedResult expected = resultBuilder(SESSION, columnTypes)
+                .row(123, "hello", sqlBinary(bytes1), sqlDate(2001, 8, 22), true, 123.45)
+                .row(null, null, null, null, null, null)
+                .row(456, "bye", sqlBinary(bytes3), sqlDate(2005, 4, 22), false, 987.65)
+                .row(881, "-inf", null, null, null, Double.NEGATIVE_INFINITY)
+                .row(882, "+inf", null, null, null, Double.POSITIVE_INFINITY)
+                .row(883, "nan", null, null, null, Double.NaN)
+                .row(884, "min", null, null, null, Double.MIN_VALUE)
+                .row(885, "max", null, null, null, Double.MAX_VALUE)
+                .build();
+
         // no tuple domain (all)
         TupleDomain<RaptorColumnHandle> tupleDomain = TupleDomain.all();
 
         try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain)) {
             MaterializedResult result = materializeSourceDataStream(SESSION, pageSource, columnTypes);
-            assertEquals(result.getRowCount(), 3);
-
-            MaterializedResult expected = resultBuilder(SESSION, columnTypes)
-                    .row(123, "hello", sqlBinary(bytes1), sqlDate(2001, 8, 22), true, 123.45)
-                    .row(null, null, null, null, null, null)
-                    .row(456, "bye", sqlBinary(bytes3), sqlDate(2005, 4, 22), false, 987.65)
-                    .build();
-
+            assertEquals(result.getRowCount(), expected.getRowCount());
             assertEquals(result, expected);
         }
 
@@ -240,7 +249,7 @@ public class TestOrcStorageManager
 
         try (ConnectorPageSource pageSource = manager.getPageSource(uuid, columnIds, columnTypes, tupleDomain)) {
             MaterializedResult result = materializeSourceDataStream(SESSION, pageSource, columnTypes);
-            assertEquals(result.getRowCount(), 3);
+            assertEquals(result.getRowCount(), expected.getRowCount());
         }
 
         // tuple domain outside the column range

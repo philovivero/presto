@@ -56,7 +56,7 @@ public class TestSqlTaskManager
 
     public TestSqlTaskManager()
     {
-        taskExecutor = new TaskExecutor(8);
+        taskExecutor = new TaskExecutor(8, 16);
         taskExecutor.start();
     }
 
@@ -245,6 +245,7 @@ public class TestSqlTaskManager
                 new MockLocationFactory(),
                 taskExecutor,
                 new QueryMonitor(new ObjectMapperProvider().get(), new NullEventClient(), new NodeInfo("test"), new NodeVersion("testVersion")),
+                new NodeInfo("test"),
                 config);
     }
 

@@ -27,6 +27,7 @@ import com.facebook.presto.execution.QueryInfo;
 import com.facebook.presto.execution.QueryManager;
 import com.facebook.presto.execution.QueryState;
 import com.facebook.presto.execution.QueryStats;
+import com.facebook.presto.execution.SharedBufferInfo;
 import com.facebook.presto.execution.StageInfo;
 import com.facebook.presto.execution.StageState;
 import com.facebook.presto.execution.TaskId;
@@ -235,6 +236,9 @@ public class StatementResource
         @GuardedBy("this")
         private Set<String> resetSessionProperties;
 
+        @GuardedBy("this")
+        private Long updateCount;
+
         public Query(Session session,
                 String query,
                 QueryManager queryManager,
@@ -313,6 +317,16 @@ public class StatementResource
                 queryInfo = queryManager.getQueryInfo(queryId);
             }
 
+            // TODO: figure out a better way to do this
+            // grab the update count for non-queries
+            if ((data != null) && (queryInfo.getUpdateType() != null) && (updateCount == null) &&
+                    (columns.size() == 1) && (columns.get(0).getType().equals(StandardTypes.BIGINT))) {
+                Iterator<List<Object>> iterator = data.iterator();
+                if (iterator.hasNext()) {
+                    updateCount = ((Number) iterator.next().get(0)).longValue();
+                }
+            }
+
             // close exchange client if the query has failed
             if (queryInfo.getState().isDone()) {
                 if (queryInfo.getState() != QueryState.FINISHED) {
@@ -323,11 +337,7 @@ public class StatementResource
                     // so close the exchange as soon as the query is done.
                     exchangeClient.close();
 
-                    // this is a hack to suppress the warn message in the client saying that there are no columns.
-                    // The reason for this is that the current API definition assumes that everything is a query,
-                    // so statements without results produce an error in the client otherwise.
-                    //
-                    // TODO: add support to the API for non-query statements.
+                    // Return a single value for clients that require a result.
                     columns = ImmutableList.of(new Column("result", "boolean", new ClientTypeSignature(StandardTypes.BOOLEAN, ImmutableList.<ClientTypeSignature>of(), ImmutableList.<Object>of())));
                     data = ImmutableSet.<List<Object>>of(ImmutableList.<Object>of(true));
                 }
@@ -352,7 +362,9 @@ public class StatementResource
                     columns,
                     data,
                     toStatementStats(queryInfo),
-                    toQueryError(queryInfo));
+                    toQueryError(queryInfo),
+                    queryInfo.getUpdateType(),
+                    updateCount);
 
             // cache the last results
             if (lastResult != null) {
@@ -418,11 +430,12 @@ public class StatementResource
 
         private synchronized void updateExchangeClient(StageInfo outputStage)
         {
-            // if the output stage is not done, update the exchange client with any additional locations
+            // add any additional output locations
             if (!outputStage.getState().isDone()) {
                 for (TaskInfo taskInfo : outputStage.getTasks()) {
-                    List<BufferInfo> buffers = taskInfo.getOutputBuffers().getBuffers();
-                    if (buffers.isEmpty()) {
+                    SharedBufferInfo outputBuffers = taskInfo.getOutputBuffers();
+                    List<BufferInfo> buffers = outputBuffers.getBuffers();
+                    if (buffers.isEmpty() || outputBuffers.getState().canAddBuffers()) {
                         // output buffer has not been created yet
                         continue;
                     }
@@ -436,10 +449,29 @@ public class StatementResource
                     exchangeClient.addLocation(uri);
                 }
             }
-            // if the output stage has finished scheduling, set no more locations
-            if ((outputStage.getState() != StageState.PLANNED) && (outputStage.getState() != StageState.SCHEDULING)) {
+
+            if (allOutputBuffersCreated(outputStage)) {
                 exchangeClient.noMoreLocations();
             }
+        }
+
+        private static boolean allOutputBuffersCreated(StageInfo outputStage)
+        {
+            StageState stageState = outputStage.getState();
+
+            // if the stage is already done, then there will be no more buffers
+            if (stageState.isDone()) {
+                return true;
+            }
+
+            // has the stage finished scheduling?
+            if (stageState == StageState.PLANNED || stageState == StageState.SCHEDULING) {
+                return false;
+            }
+
+            // have all tasks finished adding buffers
+            return outputStage.getTasks().stream()
+                    .allMatch(taskInfo -> !taskInfo.getOutputBuffers().getState().canAddBuffers());
         }
 
         private synchronized URI createNextResultsUri(UriInfo uriInfo)

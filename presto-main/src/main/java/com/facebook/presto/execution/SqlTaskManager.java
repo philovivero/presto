@@ -27,6 +27,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.concurrent.ThreadPoolExecutorMBean;
 import io.airlift.log.Logger;
+import io.airlift.node.NodeInfo;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import org.joda.time.DateTime;
@@ -78,18 +79,20 @@ public class SqlTaskManager
             final LocationFactory locationFactory,
             TaskExecutor taskExecutor,
             QueryMonitor queryMonitor,
+            NodeInfo nodeInfo,
             TaskManagerConfig config)
     {
+        checkNotNull(nodeInfo, "nodeInfo is null");
         checkNotNull(config, "config is null");
         infoCacheTime = config.getInfoMaxAge();
         clientTimeout = config.getClientTimeout();
 
         final DataSize maxBufferSize = config.getSinkMaxBufferSize();
 
-        taskNotificationExecutor = newCachedThreadPool(threadsNamed("task-notification-%d"));
+        taskNotificationExecutor = newCachedThreadPool(threadsNamed("task-notification-%s"));
         taskNotificationExecutorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) taskNotificationExecutor);
 
-        taskManagementExecutor = newScheduledThreadPool(5, threadsNamed("task-management-%d"));
+        taskManagementExecutor = newScheduledThreadPool(5, threadsNamed("task-management-%s"));
         taskManagementExecutorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) taskManagementExecutor);
 
         final SqlTaskExecutionFactory sqlTaskExecutionFactory = new SqlTaskExecutionFactory(taskNotificationExecutor, taskExecutor, planner, queryMonitor, config);
@@ -102,6 +105,7 @@ public class SqlTaskManager
             {
                 return new SqlTask(
                         taskId,
+                        nodeInfo.getInstanceId(),
                         locationFactory.createLocalTaskLocation(taskId),
                         sqlTaskExecutionFactory,
                         taskNotificationExecutor,
@@ -118,7 +122,7 @@ public class SqlTaskManager
     @PostConstruct
     public void start()
     {
-        taskManagementExecutor.scheduleAtFixedRate(new Runnable()
+        taskManagementExecutor.scheduleWithFixedDelay(new Runnable()
         {
             @Override
             public void run()
@@ -138,7 +142,7 @@ public class SqlTaskManager
             }
         }, 200, 200, TimeUnit.MILLISECONDS);
 
-        taskManagementExecutor.scheduleAtFixedRate(new Runnable()
+        taskManagementExecutor.scheduleWithFixedDelay(new Runnable()
         {
             @Override
             public void run()

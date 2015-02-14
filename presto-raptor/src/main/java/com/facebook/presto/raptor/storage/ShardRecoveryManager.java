@@ -17,7 +17,6 @@ import com.facebook.presto.raptor.metadata.ShardManager;
 import com.facebook.presto.spi.NodeManager;
 import com.facebook.presto.spi.PrestoException;
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Objects;
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
@@ -36,6 +35,7 @@ import java.io.IOException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.util.Comparator;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
@@ -49,6 +49,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.facebook.presto.raptor.RaptorErrorCode.RAPTOR_ERROR;
 import static com.facebook.presto.raptor.RaptorErrorCode.RAPTOR_RECOVERY_ERROR;
+import static com.facebook.presto.raptor.util.FileUtil.copyFile;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
@@ -162,7 +163,7 @@ public class ShardRecoveryManager
         long start = System.nanoTime();
 
         try {
-            Files.copy(backupFile.toPath(), stagingFile.toPath());
+            copyFile(backupFile.toPath(), stagingFile.toPath());
         }
         catch (IOException e) {
             throw new PrestoException(RAPTOR_ERROR, "Failed to copy backup shard: " + shardUuid, e);
@@ -277,14 +278,14 @@ public class ShardRecoveryManager
             }
 
             MissingShard other = (MissingShard) o;
-            return Objects.equal(this.active, other.active) &&
-                    Objects.equal(this.shardUuid, other.shardUuid);
+            return Objects.equals(this.active, other.active) &&
+                    Objects.equals(this.shardUuid, other.shardUuid);
         }
 
         @Override
         public int hashCode()
         {
-            return Objects.hashCode(shardUuid, active);
+            return Objects.hash(shardUuid, active);
         }
 
         @Override

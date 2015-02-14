@@ -35,6 +35,7 @@ import javax.annotation.Nullable;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,6 +50,7 @@ public class SqlTask
     private static final Logger log = Logger.get(SqlTask.class);
 
     private final TaskId taskId;
+    private final String nodeInstanceId;
     private final URI location;
     private final TaskStateMachine taskStateMachine;
     private final SharedBuffer sharedBuffer;
@@ -62,6 +64,7 @@ public class SqlTask
 
     public SqlTask(
             TaskId taskId,
+            String nodeInstanceId,
             URI location,
             SqlTaskExecutionFactory sqlTaskExecutionFactory,
             ExecutorService taskNotificationExecutor,
@@ -69,6 +72,7 @@ public class SqlTask
             DataSize maxBufferSize)
     {
         this.taskId = checkNotNull(taskId, "taskId is null");
+        this.nodeInstanceId = checkNotNull(nodeInstanceId, "nodeInstanceId is null");
         this.location = checkNotNull(location, "location is null");
         this.sqlTaskExecutionFactory = checkNotNull(sqlTaskExecutionFactory, "sqlTaskExecutionFactory is null");
         checkNotNull(taskNotificationExecutor, "taskNotificationExecutor is null");
@@ -174,6 +178,7 @@ public class SqlTask
 
         return new TaskInfo(
                 taskStateMachine.getTaskId(),
+                Optional.of(nodeInstanceId),
                 versionNumber,
                 state,
                 location,
@@ -203,32 +208,36 @@ public class SqlTask
 
     public TaskInfo updateTask(Session session, PlanFragment fragment, List<TaskSource> sources, OutputBuffers outputBuffers)
     {
-        // assure the task execution is only created once
-        SqlTaskExecution taskExecution;
-        synchronized (this) {
-            // is task already complete?
-            TaskHolder taskHolder = taskHolderReference.get();
-            if (taskHolder.isFinished()) {
-                return taskHolder.getFinalTaskInfo();
-            }
-            taskExecution = taskHolder.getTaskExecution();
-            if (taskExecution == null) {
-                try {
+        try {
+            // assure the task execution is only created once
+            SqlTaskExecution taskExecution;
+            synchronized (this) {
+                // is task already complete?
+                TaskHolder taskHolder = taskHolderReference.get();
+                if (taskHolder.isFinished()) {
+                    return taskHolder.getFinalTaskInfo();
+                }
+                taskExecution = taskHolder.getTaskExecution();
+                if (taskExecution == null) {
                     taskExecution = sqlTaskExecutionFactory.create(session, taskStateMachine, sharedBuffer, fragment, sources);
                     taskHolderReference.compareAndSet(taskHolder, new TaskHolder(taskExecution));
                 }
-                catch (RuntimeException e) {
-                    failed(e);
-                }
+            }
+
+            lastHeartbeat.set(DateTime.now());
+
+            if (taskExecution != null) {
+                // addSources checks for task completion, so update the buffers first and the task might complete earlier
+                sharedBuffer.setOutputBuffers(outputBuffers);
+                taskExecution.addSources(sources);
             }
         }
-
-        lastHeartbeat.set(DateTime.now());
-
-        if (taskExecution != null) {
-            // addSources checks for task completion, so update the buffers first and the task might complete earlier
-            sharedBuffer.setOutputBuffers(outputBuffers);
-            taskExecution.addSources(sources);
+        catch (Error e) {
+            failed(e);
+            throw e;
+        }
+        catch (RuntimeException e) {
+            failed(e);
         }
 
         return getTaskInfo();
